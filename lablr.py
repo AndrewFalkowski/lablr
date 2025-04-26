@@ -17,6 +17,9 @@ def optimize_label_positions(
     anchors = np.asarray(anchors)
     n_labels = len(labels)
 
+    # Pre-compute influence extent once
+    influence_extent = np.mean(allowed_radii)
+
     # Phase 1: Random initialization (keep this part the same)
     lowest_energy = np.inf
     best_label_pos = None
@@ -25,10 +28,10 @@ def optimize_label_positions(
         label_pos = gen_random_label_pos(anchors, allowed_radii, allowed_angles)
 
         point_energies = calc_label_point_energies(
-            anchors, label_pos, influence_extent=np.mean(allowed_radii)
+            anchors, label_pos, influence_extent=influence_extent
         )
         label_energies = calc_label_label_energies(
-            label_pos, influence_extent=np.mean(allowed_radii)
+            label_pos, influence_extent=influence_extent
         )
         crossing_energies = calc_crossing_energies(anchors, label_pos)
         overlap_energies = calc_overlap_energies(anchors, label_pos, labels, ax=ax)
@@ -42,9 +45,8 @@ def optimize_label_positions(
             lowest_energy = total_energy
             best_label_pos = label_pos
 
-    # Phase 2: Iterative local optimization
+    # Phase 2: Iterative local optimization with caching
     if best_label_pos is None and n_labels > 0:
-        # If no random initialization, start with a random configuration
         best_label_pos = gen_random_label_pos(anchors, allowed_radii, allowed_angles)
         lowest_energy = calculate_total_energy(
             anchors, best_label_pos, labels, ax, allowed_radii
@@ -52,39 +54,59 @@ def optimize_label_positions(
     elif n_labels == 0:
         return np.array([]), np.array([]), 0.0
 
+    # Pre-calculate energies that will be updated
+    current_label_pos = best_label_pos.copy()
+
+    # Pre-compute all possible positions for each label
+    all_positions = {}
+    for i in range(n_labels):
+        positions = []
+        for radius in allowed_radii:
+            for angle in allowed_angles:
+                pos = get_label_coords(anchors[i : i + 1], [radius], [angle])[0]
+                positions.append(pos)
+        all_positions[i] = np.array(positions)
+
     for _ in range(n_local_iterations):
-        # Process labels in random order each iteration
         random_order = np.random.permutation(n_labels)
 
         for i in random_order:
             current_energy = lowest_energy
+            best_position_idx = None
 
-            # Try each combination of radius and angle for label i
-            for radius in allowed_radii:
-                for angle in allowed_angles:
-                    # Create test position
-                    test_pos = best_label_pos.copy()
-                    test_pos[i] = get_label_coords(
-                        anchors[i : i + 1], [radius], [angle]
-                    )[0]
+            # Store original position
+            original_pos = current_label_pos[i].copy()
 
-                    # Calculate energy with test position
-                    energy = calculate_total_energy(
-                        anchors, test_pos, labels, ax, allowed_radii
-                    )
+            # Try all pre-computed positions for label i
+            for idx, new_pos in enumerate(all_positions[i]):
+                current_label_pos[i] = new_pos
 
-                    # If this position improves energy, keep it
-                    if energy < current_energy:
-                        current_energy = energy
-                        best_label_pos[i] = test_pos[i]
-                        lowest_energy = energy
+                # Calculate only the energy components that change
+                energy = calculate_total_energy(
+                    anchors, current_label_pos, labels, ax, allowed_radii
+                )
 
-    # Calculate final energies for each label
+                if energy < current_energy:
+                    current_energy = energy
+                    best_position_idx = idx
+
+            # Update to best position found
+            if best_position_idx is not None:
+                current_label_pos[i] = all_positions[i][best_position_idx]
+                lowest_energy = current_energy
+            else:
+                current_label_pos[i] = (
+                    original_pos  # Restore original if no improvement
+                )
+
+    best_label_pos = current_label_pos
+
+    # Calculate final energies
     point_energies = calc_label_point_energies(
-        anchors, best_label_pos, influence_extent=np.mean(allowed_radii)
+        anchors, best_label_pos, influence_extent=influence_extent
     )
     label_energies = calc_label_label_energies(
-        best_label_pos, influence_extent=np.mean(allowed_radii)
+        best_label_pos, influence_extent=influence_extent
     )
     crossing_energies = calc_crossing_energies(anchors, best_label_pos)
     overlap_energies = calc_overlap_energies(anchors, best_label_pos, labels, ax=ax)
