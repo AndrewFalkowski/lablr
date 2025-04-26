@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 from typing import Union, List
 from numpy.typing import ArrayLike, NDArray
 from energy import *
+from tqdm import tqdm, trange
 
 
 def optimize_label_positions(
@@ -24,7 +25,7 @@ def optimize_label_positions(
     lowest_energy = np.inf
     best_label_pos = None
 
-    for _ in range(n_random_iterations):
+    for _ in trange(n_random_iterations, desc="Random Iterations"):
         label_pos = gen_random_label_pos(anchors, allowed_radii, allowed_angles)
 
         point_energies = calc_label_point_energies(
@@ -67,7 +68,7 @@ def optimize_label_positions(
                 positions.append(pos)
         all_positions[i] = np.array(positions)
 
-    for _ in range(n_local_iterations):
+    for _ in trange(n_local_iterations, desc="Local Iterations"):
         random_order = np.random.permutation(n_labels)
 
         for i in random_order:

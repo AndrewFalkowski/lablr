@@ -154,28 +154,28 @@ def calc_crossing_energies(
 
             # General case
             if o1 != o2 and o3 != o4:
-                energies[i] = 1
+                energies[i] = 10
                 break  # No need to check more segments once we find an intersection
 
             # Special cases for collinear segments
             # p1, q1 and p2 are collinear and p2 lies on segment p1q1
             if o1 == 0 and on_segment(p1, p2, q1):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
             # p1, q1 and q2 are collinear and q2 lies on segment p1q1
             if o2 == 0 and on_segment(p1, q2, q1):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
             # p2, q2 and p1 are collinear and p1 lies on segment p2q2
             if o3 == 0 and on_segment(p2, p1, q2):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
             # p2, q2 and q1 are collinear and q1 lies on segment p2q2
             if o4 == 0 and on_segment(p2, q1, q2):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
     return energies
@@ -274,6 +274,77 @@ def calc_crossing_energies_old(
 def calc_overlap_energies(
     anchors: ArrayLike, label_pos: ArrayLike, labels: List[str], ax: plt.Axes
 ) -> NDArray[np.float64]:
+    """Calculate energy based on whether text labels overlap with other geometry."""
+    anchors = np.asarray(anchors)
+    label_pos = np.asarray(label_pos)
+    n_labels = len(labels)
+    energies = np.zeros(n_labels)
+
+    # Ensure up-to-date figure state
+    ax.figure.canvas.draw_idle()
+
+    # Use a more precise renderer
+    renderer = ax.figure.canvas.get_renderer()
+
+    # Get bounding boxes with proper renderer
+    bboxes = []
+    for i, (pos, label) in enumerate(zip(label_pos, labels)):
+        # Create text object without drawing it
+        text_obj = ax.text(
+            pos[0],
+            pos[1],
+            label,
+            ha="center",
+            va="center",
+            bbox=dict(boxstyle="square,pad=0.3", alpha=0),
+            zorder=999,  # Ensure text is on top
+        )
+
+        # Get precise bounding box
+        bbox = text_obj.get_window_extent(renderer=renderer).transformed(
+            ax.transData.inverted()
+        )
+
+        bboxes.append(bbox)
+        text_obj.remove()
+
+    # Check overlaps with better precision
+    for i in range(n_labels):
+        # Check label-label overlaps
+        for j in range(n_labels):
+            if i != j and bboxes[i].overlaps(bboxes[j]):
+                energies[i] = 10
+                break
+
+        # Check label-anchor overlaps with buffer
+        for anchor in anchors:
+            # Expand bbox slightly for better detection
+            expanded_bbox = bboxes[i].expanded(1.1, 1.1)
+            if expanded_bbox.contains(anchor[0], anchor[1]):
+                energies[i] = 10
+                break
+
+        # Check label-line overlaps with improved algorithm
+        for j in range(n_labels):
+            if i != j:
+                # Add more sampling points along the line
+                num_samples = 10
+                t = np.linspace(0, 1, num_samples)
+                line_points = anchors[j] + t[:, None] * (label_pos[j] - anchors[j])
+
+                for point in line_points:
+                    if bboxes[i].contains(point[0], point[1]):
+                        energies[i] = 10
+                        break
+                if energies[i] == 10:
+                    break
+
+    return energies
+
+
+def calc_overlap_energies_old(
+    anchors: ArrayLike, label_pos: ArrayLike, labels: List[str], ax: plt.Axes
+) -> NDArray[np.float64]:
     """Calculate energy based on whether text labels overlap with other geometry.
 
     This function checks if text labels overlap with:
@@ -314,7 +385,7 @@ def calc_overlap_energies(
                 label,
                 ha="center",
                 va="center",
-                bbox=dict(boxstyle="square,pad=0.2", alpha=0),
+                bbox=dict(boxstyle="square,pad=0.5", alpha=0),
             )
             # Force draw only when necessary
             ax.figure.canvas.draw()
@@ -329,13 +400,13 @@ def calc_overlap_energies(
         # Check label-label overlaps
         for j in range(n_labels):
             if i != j and bboxes[i].overlaps(bboxes[j]):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
         # Check if label overlaps with any anchor points
         for anchor in anchors:
             if bboxes[i].contains(anchor[0], anchor[1]):
-                energies[i] = 1
+                energies[i] = 10
                 break
 
         # Check if label overlaps with any connecting lines
@@ -343,84 +414,8 @@ def calc_overlap_energies(
             if i != j:
                 # Simple approximation: check if line segment intersects bbox
                 if _line_bbox_intersect(anchors[j], label_pos[j], bboxes[i]):
-                    energies[i] = 1
+                    energies[i] = 10
                     break
-
-    return energies
-
-
-def calc_overlap_energies_old(
-    anchors: ArrayLike, label_pos: ArrayLike, labels: List[str], ax: plt.Axes
-) -> NDArray[np.float64]:
-    """Calculate energy based on whether text labels overlap with other geometry.
-
-    This function checks if text labels overlap with:
-    1. Other labels
-    2. Lines connecting anchors to labels
-    3. Anchor points
-
-    Args:
-        anchors: Array of shape (n, 2) containing anchor points.
-        label_pos: Array of shape (n, 2) containing label positions.
-        labels: List of label strings.
-        ax: Matplotlib Axes object for text rendering.
-
-    Returns:
-        Array of shape (n,) containing energy values. Energy = 1 if label overlaps
-        with anything, 0 otherwise.
-    """
-    anchors = np.asarray(anchors)
-    label_pos = np.asarray(label_pos)
-    n_labels = len(labels)
-    energies = np.zeros(n_labels)
-
-    # Create text objects and get their bounding boxes
-    text_objects = []
-    for i, (pos, label) in enumerate(zip(label_pos, labels)):
-        text_obj = ax.text(
-            pos[0],
-            pos[1],
-            label,
-            ha="center",
-            va="center",
-            bbox=dict(boxstyle="square,pad=0.2", alpha=0),
-        )
-        text_objects.append(text_obj)
-
-    # Force draw to get accurate bounding boxes
-    ax.figure.canvas.draw()
-
-    # Get bounding boxes in data coordinates
-    bboxes = []
-    for text_obj in text_objects:
-        bbox = text_obj.get_window_extent().transformed(ax.transData.inverted())
-        bboxes.append(bbox)
-
-    # Check for overlaps
-    for i in range(n_labels):
-        # Check label-label overlaps
-        for j in range(n_labels):
-            if i != j and bboxes[i].overlaps(bboxes[j]):
-                energies[i] = 1
-                break
-
-        # Check if label overlaps with any anchor points
-        for anchor in anchors:
-            if bboxes[i].contains(anchor[0], anchor[1]):
-                energies[i] = 1
-                break
-
-        # Check if label overlaps with any connecting lines
-        for j in range(n_labels):
-            if i != j:
-                # Simple approximation: check if line segment intersects bbox
-                if _line_bbox_intersect(anchors[j], label_pos[j], bboxes[i]):
-                    energies[i] = 1
-                    break
-
-    # Cleanup
-    for text_obj in text_objects:
-        text_obj.remove()
 
     return energies
 
