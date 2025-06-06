@@ -187,6 +187,62 @@ def compute_repulsion_vectors(
                 dy = box2[1] - box1[1]
                 center_distance = np.sqrt(dx**2 + dy**2)
 
+                # Compute effective distance
+                distance = compute_box_distance(box1, box2)
+
+                # Clamp the distance to a minimum positive value
+                distance = max(distance, 1e-6)
+
+                if distance > 0:
+                    direction = np.array([dx, dy]) / center_distance
+                    repulsion = gaussian_repulsion(distance, sigma_box)
+                    repulsion_vectors[i] -= direction * repulsion
+
+    # Repulsion from fixed points (using sigma_fixed)
+    for i in range(n_movable):
+        for j in range(n_fixed):
+            box = movable_boxes[i]
+            # Convert fixed point to tiny box format
+            fixed_box = [fixed_points[j, 0], fixed_points[j, 1], 1e-9, 1e-9]
+
+            # Center-to-center vector
+            dx = fixed_box[0] - box[0]
+            dy = fixed_box[1] - box[1]
+            center_distance = np.sqrt(dx**2 + dy**2)
+
+            # Compute effective distance
+            distance = compute_box_distance(box, fixed_box)
+            # Clamp the distance to a minimum positive value
+            distance = max(distance, 1e-6)
+
+            if distance > 0:
+                direction = np.array([dx, dy]) / center_distance
+                repulsion = gaussian_repulsion(distance, sigma_fixed)
+                repulsion_vectors[i] -= direction * repulsion
+
+    return repulsion_vectors
+
+
+def compute_repulsion_vectors_old(
+    movable_boxes, fixed_points, sigma_box=1.0, sigma_fixed=1.0
+):
+    """Compute the net repulsion vector for each movable box with separate sigmas."""
+    n_movable = len(movable_boxes)
+    n_fixed = len(fixed_points)
+    repulsion_vectors = np.zeros((n_movable, 2))
+
+    # Repulsion from other movable boxes (using sigma_box)
+    for i in range(n_movable):
+        for j in range(n_movable):
+            if i != j:
+                box1 = movable_boxes[i]
+                box2 = movable_boxes[j]
+
+                # Center-to-center vector
+                dx = box2[0] - box1[0]
+                dy = box2[1] - box1[1]
+                center_distance = np.sqrt(dx**2 + dy**2)
+
                 if center_distance > 0:
                     # Compute effective distance
                     distance = compute_box_distance(box1, box2)
@@ -303,23 +359,6 @@ def iterative_repulsion(
         positions_history.append([box.copy() for box in new_boxes])
         energy_history.append(energy)
         movable_boxes = new_boxes
-
-        # Check if the last 10 energy values are within x% of each other
-        # if len(energy_history) > 20:
-        #     last_10_energies = energy_history[-20:]
-        #     mean_energy = np.mean(last_10_energies)
-
-        #     # Calculate percentage difference from mean
-        #     percent_threshold = 0.005  # Adjust this value for x%
-
-        #     if np.all(
-        #         np.abs(last_10_energies - mean_energy)
-        #         <= mean_energy * percent_threshold
-        #     ):
-        #         print(
-        #             f"Energy values have been within {percent_threshold*100}% of each other for the last 10 iterations, stopping early."
-        #         )
-        #         break
 
     return positions_history, energy_history
 
