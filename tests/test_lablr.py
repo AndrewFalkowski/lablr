@@ -22,7 +22,7 @@ from lablr import (
     optimize_layout,
     place_labels,
 )
-from lablr.optimizer import _Scene, _normalize_angles_rad
+from lablr.optimizer import _normalize_angles_rad, _Scene
 
 
 def test_sdfs_exact_values_and_aabb_cutoff():
@@ -36,10 +36,16 @@ def test_sdfs_exact_values_and_aabb_cutoff():
     d, g = box_point_sdf(np.array([2.0, 3.0]), half)
     assert np.isclose(d, -2.0) and np.allclose(g, [0.0, 1.0])
 
-    # Coincident box-box antisymmetry
-    d_bb, g_bb = box_box_sdf(np.array([[50.0, 50.0], [50.0, 50.0]]), np.array([[20.0, 7.0], [20.0, 7.0]]))
+    # Coincident box-box antisymmetry & box-frame clearance
+    d_bb, g_bb = box_box_sdf(
+        np.array([[50.0, 50.0], [50.0, 50.0]]), np.array([[20.0, 7.0], [20.0, 7.0]])
+    )
     assert np.isinf(d_bb[0, 0]) and np.isclose(d_bb[0, 1], -14.0)
     assert np.allclose(g_bb[0, 1], -g_bb[1, 0])
+    d_fr, _ = box_frame_sdf(
+        np.array([[10.0, 10.0]]), np.array([[4.0, 2.0]]), (0.0, 0.0, 20.0, 15.0)
+    )
+    assert np.allclose(d_fr[0], [6.0, 6.0, 8.0, 3.0])
 
     # Segment SDFs with and without AABB cutoff match exactly on close pairs
     starts, ends = np.array([[0.0, 0.0]]), np.array([[20.0, 0.0]])
@@ -144,7 +150,11 @@ def _rendered_annotation_bboxes_pt(fig, annotations):
     centers, halfs = [], []
     for ann in annotations:
         patch = ann.get_bbox_patch()
-        ext = patch.get_window_extent(renderer) if patch is not None else ann.get_window_extent(renderer)
+        ext = (
+            patch.get_window_extent(renderer)
+            if patch is not None
+            else ann.get_window_extent(renderer)
+        )
         centers.append([0.5 * (ext.x0 + ext.x1) * scale, 0.5 * (ext.y0 + ext.y1) * scale])
         halfs.append([0.5 * ext.width * scale, 0.5 * ext.height * scale])
     return np.array(centers), np.array(halfs)
@@ -163,7 +173,9 @@ def test_matplotlib_dense_scatter_dpi_invariant_and_flush_matched_leashes():
 
     text_kw = {"fontsize": 9}
     bbox_kw = {"boxstyle": "round,pad=0.2", "facecolor": "white"}
-    res = place_labels(ax, points, labels, text_kwargs=text_kw, bbox_kwargs=bbox_kw, record_history=True)
+    res = place_labels(
+        ax, points, labels, text_kwargs=text_kw, bbox_kwargs=bbox_kw, record_history=True
+    )
 
     assert text_kw == {"fontsize": 9}
     assert bbox_kw == {"boxstyle": "round,pad=0.2", "facecolor": "white"}
@@ -172,11 +184,16 @@ def test_matplotlib_dense_scatter_dpi_invariant_and_flush_matched_leashes():
     assert res.metrics.n_frame_clips == 0
     assert res.metrics.n_crossings == 0
 
-    expected_rgb = sc.get_facecolors()[0][:3]
+    expected_rgb = np.asarray(sc.get_facecolor())[0, :3]
     ann0 = res.annotations[0]
+    assert ann0.arrowprops is not None
     assert ann0.arrowprops["shrinkB"] == 0.0
-    assert np.allclose(ann0.get_bbox_patch().get_edgecolor()[:3], expected_rgb, atol=1e-2)
-    assert np.allclose(ann0.arrow_patch.get_edgecolor()[:3], expected_rgb, atol=1e-2)
+    bbox_patch = ann0.get_bbox_patch()
+    arrow_patch = ann0.arrow_patch
+    assert bbox_patch is not None
+    assert arrow_patch is not None
+    assert np.allclose(bbox_patch.get_edgecolor()[:3], expected_rgb, atol=1e-2)
+    assert np.allclose(arrow_patch.get_edgecolor()[:3], expected_rgb, atol=1e-2)
 
     c100, h100 = _rendered_annotation_bboxes_pt(fig, res.annotations)
     assert np.min(box_box_sdf(c100, h100)[0]) >= -0.5

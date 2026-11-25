@@ -7,10 +7,12 @@ physical typography points (1 pt = 1/72 in), then renders labels with
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Sequence
+from typing import Any, cast
 
 import matplotlib.axes
+import matplotlib.backend_bases
 import matplotlib.collections
 import matplotlib.colors
 import matplotlib.text
@@ -41,6 +43,10 @@ def _points_per_pixel(ax: matplotlib.axes.Axes) -> float:
     return 72.0 / float(ax.figure.dpi)
 
 
+def _get_renderer(ax: matplotlib.axes.Axes) -> matplotlib.backend_bases.RendererBase:
+    return cast(Any, ax.figure.canvas).get_renderer()
+
+
 def measure_labels_pt(
     ax: matplotlib.axes.Axes,
     labels: Sequence[str],
@@ -54,10 +60,10 @@ def measure_labels_pt(
         return empty, empty.copy()
 
     ax.figure.canvas.draw()
-    renderer = ax.figure.canvas.get_renderer()
+    renderer = _get_renderer(ax)
     scale = _points_per_pixel(ax)
 
-    t_kw = {"ha": "center", "va": "center", **(text_kwargs or {})}
+    t_kw: dict[str, Any] = {"ha": "center", "va": "center", **(text_kwargs or {})}
     anchor_px = ax.transAxes.transform((0.5, 0.5))
     sizes_pt = np.zeros((n, 2), dtype=np.float64)
     center_offsets_pt = np.zeros((n, 2), dtype=np.float64)
@@ -67,8 +73,13 @@ def measure_labels_pt(
             txt = ax.text(0.5, 0.5, label, transform=ax.transAxes, bbox=dict(bbox_kwargs), **t_kw)
             txt.update_bbox_position_size(renderer)
             patch = txt.get_bbox_patch()
-            ext = patch.get_window_extent(renderer)
-            lw = float(patch.get_linewidth()) if patch.get_edgecolor()[3] > 0 else 0.0
+            if patch is not None:
+                ext = patch.get_window_extent(renderer)
+                ec_rgba = matplotlib.colors.to_rgba(patch.get_edgecolor())
+                lw = float(patch.get_linewidth()) if ec_rgba[3] > 0.0 else 0.0
+            else:
+                ext = txt.get_window_extent(renderer)
+                lw = 0.0
         else:
             txt = ax.text(0.5, 0.5, label, transform=ax.transAxes, **t_kw)
             ext = txt.get_window_extent(renderer)
@@ -102,13 +113,13 @@ def _detect_plotted_points(
             pts_pt = coll.get_offset_transform().transform(offsets) * scale
             sizes = np.asarray(coll.get_sizes(), dtype=np.float64)
             s_arr = np.resize(sizes, m) if sizes.size > 0 else np.full(m, 38.0)
-            lws = np.asarray(coll.get_linewidths(), dtype=np.float64)
+            lws = np.asarray(coll.get_linewidth(), dtype=np.float64)
             lw_arr = np.resize(lws, m) if lws.size > 0 else 0.0
             radii = np.sqrt(np.maximum(s_arr, 0.0) / np.pi) + 0.5 * lw_arr
 
-            fc = coll.get_facecolors()
+            fc = coll.get_facecolor()
             if len(fc) == 0:
-                fc = coll.get_edgecolors()
+                fc = coll.get_edgecolor()
             if len(fc) == 0:
                 rgba = np.tile([0.2, 0.2, 0.2, 1.0], (m, 1))
             elif len(fc) == 1:
@@ -235,7 +246,7 @@ def place_labels(
         ax, labels_list, text_kwargs=text_kwargs, bbox_kwargs=bbox_kwargs
     )
     scale = _points_per_pixel(ax)
-    renderer = ax.figure.canvas.get_renderer()
+    renderer = _get_renderer(ax)
 
     anchors_pt = ax.transData.transform(pts_data) * scale if n > 0 else np.empty((0, 2))
     ax_ext = ax.get_window_extent(renderer)
@@ -270,7 +281,7 @@ def place_labels(
         record_history=record_history,
     )
 
-    t_kw = {"ha": "center", "va": "center", **(text_kwargs or {})}
+    t_kw: dict[str, Any] = {"ha": "center", "va": "center", **(text_kwargs or {})}
     offsets_pt = layout.centers - anchors_pt
     positions_data = (
         ax.transData.inverted().transform(layout.centers / scale)
@@ -298,10 +309,14 @@ def place_labels(
         if use_lines:
             h_i = 0.5 * sizes_pt[i]
             rel_x = float(
-                np.clip((anchors_pt[i, 0] - layout.centers[i, 0]) / (2.0 * h_i[0]) + 0.5, 0.04, 0.96)
+                np.clip(
+                    (anchors_pt[i, 0] - layout.centers[i, 0]) / (2.0 * h_i[0]) + 0.5, 0.04, 0.96
+                )
             )
             rel_y = float(
-                np.clip((anchors_pt[i, 1] - layout.centers[i, 1]) / (2.0 * h_i[1]) + 0.5, 0.04, 0.96)
+                np.clip(
+                    (anchors_pt[i, 1] - layout.centers[i, 1]) / (2.0 * h_i[1]) + 0.5, 0.04, 0.96
+                )
             )
             ap = {
                 "arrowstyle": "-",

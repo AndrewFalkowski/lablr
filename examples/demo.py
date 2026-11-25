@@ -4,14 +4,45 @@ from __future__ import annotations
 
 import argparse
 import time
+from typing import Any
 
+import matplotlib.axes
+import matplotlib.figure
 import matplotlib.pyplot as plt
 import numpy as np
 
-from lablr import place_labels
+from lablr import PlacementResult, place_labels
 
 
-def build_demo_figure() -> plt.Figure:
+def _run_panel(
+    ax: matplotlib.axes.Axes,
+    points: Any,
+    labels: list[str],
+    *,
+    distance: float = 8.0,
+    text_kwargs: dict[str, Any] | None = None,
+    bbox_kwargs: dict[str, Any] | None = None,
+) -> PlacementResult:
+    t0 = time.perf_counter()
+    res = place_labels(
+        ax,
+        points,
+        labels,
+        distance=distance,
+        text_kwargs=text_kwargs,
+        bbox_kwargs=bbox_kwargs,
+    )
+    dt_ms = (time.perf_counter() - t0) * 1000.0
+    m = res.metrics
+    print(
+        f"{ax.get_title():44s} | {dt_ms:5.1f} ms | "
+        f"lbl_ov={m.n_label_overlaps} pt_ov={m.n_point_overlaps} "
+        f"line_ov={m.n_line_overlaps} frame={m.n_frame_clips} cross={m.n_crossings}"
+    )
+    return res
+
+
+def build_demo_figure() -> matplotlib.figure.Figure:
     fig, axes = plt.subplots(2, 2, figsize=(13, 10), dpi=150)
 
     # 1. Dense random scatter (N=40)
@@ -30,9 +61,7 @@ def build_demo_figure() -> plt.Figure:
     c1 = rng.normal([0.25, 0.72], 0.06, size=(12, 2))
     c2 = rng.normal([0.75, 0.30], 0.06, size=(12, 2))
     pts2 = np.vstack([c1, c2])
-    labels2 = [
-        f"Cluster A #{i}" if i % 3 == 0 else f"A{i}" for i in range(12)
-    ] + [
+    labels2 = [f"Cluster A #{i}" if i % 3 == 0 else f"A{i}" for i in range(12)] + [
         f"Long Label B-{i}" if i % 4 == 0 else f"B{i}" for i in range(12)
     ]
     ax.scatter(pts2[:, 0], pts2[:, 1], s=65, color="tab:orange", zorder=3)
@@ -45,7 +74,7 @@ def build_demo_figure() -> plt.Figure:
     rng3 = np.random.default_rng(42)
     x3 = 10.0 ** rng3.uniform(0.5, 4.5, size=20)
     y3 = rng3.uniform(0.001, 0.01, size=20)
-    labels3 = [f"Pt {i} ({y3[i]*1e3:.1f}m)" for i in range(20)]
+    labels3 = [f"Pt {i} ({y3[i] * 1e3:.1f}m)" for i in range(20)]
     ax.scatter(x3, y3, s=110, color="tab:green", zorder=3)
     ax.set_xscale("log")
     ax.set_xlim(1.0, 1e5)
@@ -67,32 +96,19 @@ def build_demo_figure() -> plt.Figure:
 
     fig.tight_layout(pad=2.0)
 
-    box = {"boxstyle": "round,pad=0.2", "facecolor": "white", "linewidth": 0.9}
-    configs = [
-        (axes[0, 0], points, labels, dict(text_kwargs={"fontsize": 8.5}, bbox_kwargs=box)),
-        (axes[0, 1], pts2, labels2, dict(distance=10.0, text_kwargs={"fontsize": 8.5}, bbox_kwargs=box)),
-        (axes[1, 0], (x3, y3), labels3, dict(text_kwargs={"fontsize": 8.5}, bbox_kwargs=box)),
-        (
-            axes[1, 1],
-            hi_pts,
-            hi_labels,
-            dict(
-                text_kwargs={"fontsize": 8.5, "fontweight": "bold", "color": "#8b0000"},
-                bbox_kwargs=box,
-            ),
-        ),
-    ]
-
-    for ax_i, pts_i, lbls_i, kw in configs:
-        t0 = time.perf_counter()
-        res = place_labels(ax_i, pts_i, lbls_i, **kw)
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        m = res.metrics
-        print(
-            f"{ax_i.get_title():44s} | {dt_ms:5.1f} ms | "
-            f"lbl_ov={m.n_label_overlaps} pt_ov={m.n_point_overlaps} "
-            f"line_ov={m.n_line_overlaps} frame={m.n_frame_clips} cross={m.n_crossings}"
-        )
+    box: dict[str, Any] = {"boxstyle": "round,pad=0.2", "facecolor": "white", "linewidth": 0.9}
+    _run_panel(axes[0, 0], points, labels, text_kwargs={"fontsize": 8.5}, bbox_kwargs=box)
+    _run_panel(
+        axes[0, 1], pts2, labels2, distance=10.0, text_kwargs={"fontsize": 8.5}, bbox_kwargs=box
+    )
+    _run_panel(axes[1, 0], (x3, y3), labels3, text_kwargs={"fontsize": 8.5}, bbox_kwargs=box)
+    _run_panel(
+        axes[1, 1],
+        hi_pts,
+        hi_labels,
+        text_kwargs={"fontsize": 8.5, "fontweight": "bold", "color": "#8b0000"},
+        bbox_kwargs=box,
+    )
 
     return fig
 

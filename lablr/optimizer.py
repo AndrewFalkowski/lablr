@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Sequence
 
 import numpy as np
 from numpy.typing import NDArray
@@ -164,12 +164,6 @@ class _Scene:
         self.angles_rad = angles_rad
         self.angle_weight = angle_weight
 
-    def _has_extra(self) -> bool:
-        return self.extra_points is not None and len(self.extra_points) > 0
-
-    def _has_obs(self) -> bool:
-        return self.obstacle_boxes is not None and len(self.obstacle_boxes[0]) > 0
-
     def energy_and_grad(
         self,
         centers: FloatArray,
@@ -186,6 +180,10 @@ class _Scene:
         energy = 0.0
         grad = np.zeros((n, 2), dtype=np.float64)
 
+        extra_pts = self.extra_points
+        has_extra = extra_pts is not None and len(extra_pts) > 0
+        obs_boxes = self.obstacle_boxes
+
         # 1. Label <-> Points
         d_pts, g_pts = box_circle_sdf(centers, self.half_extents, self.anchors, self.radii)
         e_own, de_own = a_pot.evaluate(d_pts[idx, idx])
@@ -199,10 +197,8 @@ class _Scene:
             energy += float(np.sum(e_o))
             grad += np.sum(de_o[..., None] * g_pts, axis=1)
 
-        if self._has_extra():
-            d_ex, g_ex = box_circle_sdf(
-                centers, self.half_extents, self.extra_points, self.extra_radii
-            )
+        if has_extra and extra_pts is not None:
+            d_ex, g_ex = box_circle_sdf(centers, self.half_extents, extra_pts, self.extra_radii)
             e_ex, de_ex = r_pot.evaluate(d_ex)
             energy += float(np.sum(e_ex))
             grad += np.sum(de_ex[..., None] * g_ex, axis=1)
@@ -230,18 +226,14 @@ class _Scene:
                 grad += np.sum(de_bl[..., None] * g_box, axis=1)
                 grad += np.sum(de_bl[..., None] * g_end, axis=0) * attach_jac
 
-                d_lp, g_lp = circle_segment_sdf(
-                    self.anchors, attach, self.anchors, self.radii
-                )
+                d_lp, g_lp = circle_segment_sdf(self.anchors, attach, self.anchors, self.radii)
                 d_lp[idx, idx] = np.inf
                 e_lp, de_lp = r_pot.evaluate(d_lp)
                 energy += float(np.sum(e_lp))
                 grad += np.sum(de_lp[..., None] * g_lp, axis=1) * attach_jac
 
-            if self._has_extra():
-                d_lex, g_lex = circle_segment_sdf(
-                    self.anchors, attach, self.extra_points, self.extra_radii
-                )
+            if has_extra and extra_pts is not None:
+                d_lex, g_lex = circle_segment_sdf(self.anchors, attach, extra_pts, self.extra_radii)
                 e_lex, de_lex = r_pot.evaluate(d_lex)
                 energy += float(np.sum(e_lex))
                 grad += np.sum(de_lex[..., None] * g_lex, axis=1) * attach_jac
@@ -254,10 +246,8 @@ class _Scene:
             grad += np.sum(de_f[..., None] * g_f, axis=1)
 
         # 5. Fixed obstacle boxes
-        if self._has_obs():
-            d_obs, g_obs = box_box_sdf(
-                centers, self.half_extents, self.obstacle_boxes[0], self.obstacle_boxes[1]
-            )
+        if obs_boxes is not None and len(obs_boxes[0]) > 0:
+            d_obs, g_obs = box_box_sdf(centers, self.half_extents, obs_boxes[0], obs_boxes[1])
             e_obs, de_obs = r_pot.evaluate(d_obs)
             energy += float(np.sum(e_obs))
             grad += np.sum(de_obs[..., None] * g_obs, axis=1)
@@ -302,6 +292,10 @@ class _Scene:
         scores = np.zeros(k, dtype=np.float64)
         cutoff = self.repel_pot.target
 
+        extra_pts = self.extra_points
+        has_extra = extra_pts is not None and len(extra_pts) > 0
+        obs_boxes = self.obstacle_boxes
+
         d_pts, _ = box_circle_sdf(cands, h_rep, self.anchors, self.radii)
         scores += self.anchor_pot.evaluate(d_pts[:, label_idx])[0]
         if self.n > 1:
@@ -309,12 +303,12 @@ class _Scene:
             d_other[:, label_idx] = np.inf
             scores += np.sum(self.repel_pot.evaluate(d_other)[0], axis=1)
 
-        if self._has_extra():
-            d_ex, _ = box_circle_sdf(cands, h_rep, self.extra_points, self.extra_radii)
+        if has_extra and extra_pts is not None:
+            d_ex, _ = box_circle_sdf(cands, h_rep, extra_pts, self.extra_radii)
             scores += np.sum(self.repel_pot.evaluate(d_ex)[0], axis=1)
 
-        has_other = other_centers is not None and len(other_centers) > 0
-        if has_other:
+        has_other = other_centers is not None and other_half is not None and len(other_centers) > 0
+        if has_other and other_centers is not None and other_half is not None:
             d_lbl, _ = box_box_sdf(cands, h_rep, other_centers, other_half)
             scores += np.sum(self.repel_pot.evaluate(d_lbl)[0], axis=1)
 
@@ -325,15 +319,16 @@ class _Scene:
                 d_lp, _ = circle_segment_sdf(a_rep, cand_attach, self.anchors, self.radii)
                 d_lp[:, label_idx] = np.inf
                 scores += np.sum(self.repel_pot.evaluate(d_lp)[0], axis=1)
-            if self._has_extra():
-                d_lex, _ = circle_segment_sdf(
-                    a_rep, cand_attach, self.extra_points, self.extra_radii
-                )
+            if has_extra and extra_pts is not None:
+                d_lex, _ = circle_segment_sdf(a_rep, cand_attach, extra_pts, self.extra_radii)
                 scores += np.sum(self.repel_pot.evaluate(d_lex)[0], axis=1)
-            if has_other and other_anchors is not None:
-                other_attach = _nearest_box_attach_points(
-                    other_anchors, other_centers, other_half
-                )
+            if (
+                has_other
+                and other_centers is not None
+                and other_half is not None
+                and other_anchors is not None
+            ):
+                other_attach = _nearest_box_attach_points(other_anchors, other_centers, other_half)
                 d_bl, _, _ = box_segment_sdf(
                     cands, h_rep, other_anchors, other_attach, cutoff=cutoff
                 )
@@ -349,10 +344,8 @@ class _Scene:
             d_f, _ = box_frame_sdf(cands, h_rep, self.bounds)
             scores += np.sum(self.repel_pot.evaluate(d_f)[0], axis=1)
 
-        if self._has_obs():
-            d_obs, _ = box_box_sdf(
-                cands, h_rep, self.obstacle_boxes[0], self.obstacle_boxes[1]
-            )
+        if obs_boxes is not None and len(obs_boxes[0]) > 0:
+            d_obs, _ = box_box_sdf(cands, h_rep, obs_boxes[0], obs_boxes[1])
             scores += np.sum(self.repel_pot.evaluate(d_obs)[0], axis=1)
 
         if self.angles_rad is not None and self.angle_weight > 0.0:
@@ -385,7 +378,10 @@ class _Scene:
         anchor = self.anchors[label_idx]
         radius = float(self.radii[label_idx])
         return np.vstack(
-            [anchor[None, :] + box_off + unit_dirs * (radius + max(off, 0.0)) for off in ring_offsets]
+            [
+                anchor[None, :] + box_off + unit_dirs * (radius + max(off, 0.0))
+                for off in ring_offsets
+            ]
         )
 
     def metrics(self, centers: FloatArray, final_energy: float, eps: float = 1e-6) -> LayoutMetrics:
@@ -402,13 +398,14 @@ class _Scene:
         else:
             n_lbl_ov, min_lbl = 0, float("inf")
 
+        extra_pts = self.extra_points
+        has_extra = extra_pts is not None and len(extra_pts) > 0
+
         d_pts, _ = box_circle_sdf(centers, self.half_extents, self.anchors, self.radii)
         n_pt_ov = int(np.sum(d_pts < -eps))
         min_pt = float(np.min(d_pts))
-        if self._has_extra():
-            d_ex, _ = box_circle_sdf(
-                centers, self.half_extents, self.extra_points, self.extra_radii
-            )
+        if has_extra and extra_pts is not None:
+            d_ex, _ = box_circle_sdf(centers, self.half_extents, extra_pts, self.extra_radii)
             n_pt_ov += int(np.sum(d_ex < -eps))
             min_pt = min(min_pt, float(np.min(d_ex)))
 
@@ -440,18 +437,15 @@ class _Scene:
                 d_lp, _ = circle_segment_sdf(self.anchors, attach, self.anchors, self.radii)
                 d_lp[idx, idx] = np.inf
                 n_line_ov += int(np.sum((d_lp < -eps) & toward))
-            if self._has_extra():
+            if has_extra and extra_pts is not None:
                 toward_ex = (
                     np.sum(
-                        (self.extra_points[None, :, :] - self.anchors[:, None, :])
-                        * v_seg[:, None, :],
+                        (extra_pts[None, :, :] - self.anchors[:, None, :]) * v_seg[:, None, :],
                         axis=-1,
                     )
                     > 1e-9
                 )
-                d_lex, _ = circle_segment_sdf(
-                    self.anchors, attach, self.extra_points, self.extra_radii
-                )
+                d_lex, _ = circle_segment_sdf(self.anchors, attach, extra_pts, self.extra_radii)
                 n_line_ov += int(np.sum((d_lex < -eps) & toward_ex))
 
         n_cross = count_segment_crossings(self.anchors, attach) if self.avoid_lines else 0
@@ -518,7 +512,9 @@ def _lbfgs_minimize(
 
         q = g_flat.copy()
         alphas: list[float] = []
-        for s_k, y_k, rho_k in zip(reversed(s_list), reversed(y_list), reversed(rho_list)):
+        for s_k, y_k, rho_k in zip(
+            reversed(s_list), reversed(y_list), reversed(rho_list), strict=True
+        ):
             a_k = rho_k * float(np.dot(s_k, q))
             alphas.append(a_k)
             q = q - a_k * y_k
@@ -530,7 +526,7 @@ def _lbfgs_minimize(
         else:
             r = q * min(1.0, 2.0 / max(float(np.max(np.abs(g_flat))), 1e-12))
 
-        for s_k, y_k, rho_k, a_k in zip(s_list, y_list, rho_list, reversed(alphas)):
+        for s_k, y_k, rho_k, a_k in zip(s_list, y_list, rho_list, reversed(alphas), strict=True):
             r = r + s_k * (a_k - rho_k * float(np.dot(y_k, r)))
 
         p = -r.reshape(x.shape)
@@ -603,7 +599,7 @@ def _uncross_pass(
         pairs = np.argwhere(np.triu(mat, k=1))
         if len(pairs) == 0:
             break
-        cur = int(len(pairs))
+        cur = len(pairs)
         did_swap = False
         for i, j in pairs:
             ci, cj = centers[i].copy(), centers[j].copy()
@@ -802,9 +798,7 @@ def _cluster_fanout_pass(
         spread = _spread_cyclic_angles(raw_angles[cyc_order], min_gap=2.0 * np.pi / len(comp))
 
         cluster_rad = float(np.max(np.hypot(rel[:, 0], rel[:, 1])))
-        perim_needed = float(
-            np.sum(2.0 * scene.half_extents[comp_arr, 1] + scene.repel_pot.target)
-        )
+        perim_needed = float(np.sum(2.0 * scene.half_extents[comp_arr, 1] + scene.repel_pot.target))
         fan_rad = max(cluster_rad, perim_needed / (2.0 * np.pi))
         base_gap = max(scene.anchor_pot.target, 6.0)
 
@@ -958,7 +952,9 @@ def optimize_layout(
             i = int(i)
             mask = np.ones(n, dtype=bool)
             mask[i] = False
-            cands = np.vstack([centers[i : i + 1], scene.candidate_ring(i, ring_offsets, cand_angles)])
+            cands = np.vstack(
+                [centers[i : i + 1], scene.candidate_ring(i, ring_offsets, cand_angles)]
+            )
             scores = scene.score_candidates(
                 i,
                 cands,

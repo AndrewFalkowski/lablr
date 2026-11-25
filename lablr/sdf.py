@@ -132,7 +132,7 @@ def circle_segment_sdf(
     points: FloatArray,
     radii: FloatArray | float = 0.0,
 ) -> tuple[FloatArray, FloatArray]:
-    """Exact SDF from N segments ``(starts -> ends)`` to M circles, with gradient w.r.t. ``ends``."""
+    """Exact SDF from N segments ``(starts -> ends)`` to M circles with gradient w.r.t. ``ends``."""
     a = np.asarray(seg_starts, dtype=np.float64)
     b = np.asarray(seg_ends, dtype=np.float64)
     p = np.asarray(points, dtype=np.float64)
