@@ -1,7 +1,7 @@
 """lablr: Automatic point-label placement for Matplotlib.
 
 Uses exact 2D signed distance fields (SDFs), pairwise target-distance
-potentials, and AABB-accelerated L-BFGS in physical typography points.
+potentials, and AABB-accelerated FIRE 2.0 inertial relaxation in physical typography points.
 """
 
 from .mpl import PlacementResult, measure_labels_pt, place_labels
@@ -15,6 +15,7 @@ from .sdf import (
     box_segment_sdf,
     circle_segment_sdf,
     count_segment_crossings,
+    segment_segment_sdf,
 )
 
 __all__ = [
@@ -33,4 +34,5 @@ __all__ = [
     "measure_labels_pt",
     "optimize_layout",
     "place_labels",
+    "segment_segment_sdf",
 ]

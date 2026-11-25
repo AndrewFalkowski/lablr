@@ -115,7 +115,7 @@ def _detect_plotted_points(
             s_arr = np.resize(sizes, m) if sizes.size > 0 else np.full(m, 38.0)
             lws = np.asarray(coll.get_linewidth(), dtype=np.float64)
             lw_arr = np.resize(lws, m) if lws.size > 0 else 0.0
-            radii = np.sqrt(np.maximum(s_arr, 0.0) / np.pi) + 0.5 * lw_arr
+            radii = 0.5 * np.sqrt(np.maximum(s_arr, 0.0)) + 0.5 * lw_arr
 
             fc = coll.get_facecolor()
             if len(fc) == 0:
@@ -323,7 +323,7 @@ def place_labels(
                 "color": outline_color if outline_color is not None else "0.35",
                 "linewidth": 0.9,
                 "shrinkA": 0.0,
-                "shrinkB": 0.0,
+                "shrinkB": float(radii_pt[i]),
                 "relpos": (rel_x, rel_y),
             }
             if arrowprops is not None:

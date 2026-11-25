@@ -1,4 +1,4 @@
-"""Tests for lablr SDFs, potentials, simplified L-BFGS optimizer, and Matplotlib frontend."""
+"""Tests for lablr SDFs, potentials, FIRE 2.0 optimizer, and Matplotlib frontend."""
 
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ from lablr import (
     measure_labels_pt,
     optimize_layout,
     place_labels,
+    segment_segment_sdf,
 )
 from lablr.optimizer import _normalize_angles_rad, _Scene
 
@@ -64,6 +65,49 @@ def test_sdfs_exact_values_and_aabb_cutoff():
     assert np.allclose(ge_full[:2], ge_cut[:2])
     assert np.isinf(d_cut[2, 0])
 
+    # Regression check: 12-candidate box_segment_sdf matches dense ground truth across penetrations
+    rng = np.random.default_rng(42)
+    ts = np.linspace(0.0, 1.0, 4001)
+    for _ in range(40):
+        c_r = rng.uniform(-20.0, 20.0, size=(1, 2))
+        h_r = rng.uniform(5.0, 30.0, size=(1, 2))
+        a_r = c_r + rng.uniform(-35.0, 35.0, size=(1, 2))
+        b_r = c_r + rng.uniform(-35.0, 35.0, size=(1, 2))
+        d_exact, _, _ = box_segment_sdf(c_r, h_r, a_r, b_r)
+        pts_t = a_r + ts[:, None] * (b_r - a_r)
+        d_gt = float(np.min(box_point_sdf(c_r - pts_t, h_r)[0]))
+        assert d_exact[0, 0] <= d_gt + 1e-12 and np.isclose(d_exact[0, 0], d_gt, atol=2e-2)
+
+    # AABB cutoffs on box_box_sdf, box_circle_sdf, circle_segment_sdf & segment_segment_sdf
+    c_multi = np.array([[0.0, 0.0], [12.0, 0.0], [200.0, 200.0]])
+    h_multi = np.array([[5.0, 3.0], [5.0, 3.0], [5.0, 3.0]])
+    dbb_full, gbb_full = box_box_sdf(c_multi, h_multi)
+    dbb_cut, gbb_cut = box_box_sdf(c_multi, h_multi, cutoff=4.0)
+    assert np.isclose(dbb_full[0, 1], dbb_cut[0, 1]) and np.isinf(dbb_cut[0, 2])
+    assert np.allclose(gbb_full[0, 1], gbb_cut[0, 1])
+    assert np.allclose(gbb_cut[0, 1], -gbb_cut[1, 0])
+
+    dbc_full, gbc_full = box_circle_sdf(c_multi, h_multi, np.array([[8.0, 0.0]]), 1.5)
+    dbc_cut, gbc_cut = box_circle_sdf(c_multi, h_multi, np.array([[8.0, 0.0]]), 1.5, cutoff=4.0)
+    assert np.allclose(dbc_full[:2], dbc_cut[:2]) and np.isinf(dbc_cut[2, 0])
+    assert np.allclose(gbc_full[:2], gbc_cut[:2])
+
+    dcs_cut, gcs_cut = circle_segment_sdf(
+        starts, ends, np.array([[10.0, 5.0], [100.0, 100.0]]), np.array([2.0, 2.0]), cutoff=5.0
+    )
+    assert np.isclose(dcs_cut[0, 0], 3.0) and np.isinf(dcs_cut[0, 1])
+    assert np.allclose(gcs_cut[0, 0], [0.0, -0.5])
+
+    # Crossed vs uncrossed segment_segment_sdf continuity & finite-difference gradient
+    sa = np.array([[0.0, 4.0], [0.0, 4.0]])
+    ea = np.array([[0.0, -1.0], [0.0, 1.5]])
+    sb = np.array([[-5.0, 0.0]])
+    eb = np.array([[5.0, 0.0]])
+    dss, gea, geb = segment_segment_sdf(sa, ea, sb, eb, cutoff=3.0)
+    assert np.isclose(dss[0, 0], -1.0) and np.isclose(dss[1, 0], 1.5)
+    assert np.allclose(gea[0, 0], [0.0, 1.0]) and np.allclose(gea[1, 0], [0.0, 1.0])
+    assert np.allclose(geb[0, 0], [0.0, -0.5]) and np.allclose(geb[1, 0], [0.0, -0.5])
+
 
 def test_scene_analytic_gradient_matches_finite_differences():
     rng = np.random.default_rng(7)
@@ -88,20 +132,21 @@ def test_scene_analytic_gradient_matches_finite_differences():
         angle_weight=0.25,
     )
 
-    _, grad = scene.energy_and_grad(centers)
+    for smooth_eps in (0.0, 1.0):
+        _, grad = scene.energy_and_grad(centers, smooth_eps=smooth_eps)
 
-    eps = 1e-6
-    num_grad = np.zeros_like(grad)
-    for i in range(n):
-        for axis in range(2):
-            cp, cm = centers.copy(), centers.copy()
-            cp[i, axis] += eps
-            cm[i, axis] -= eps
-            ep, _ = scene.energy_and_grad(cp)
-            em, _ = scene.energy_and_grad(cm)
-            num_grad[i, axis] = (ep - em) / (2.0 * eps)
+        eps = 1e-6
+        num_grad = np.zeros_like(grad)
+        for i in range(n):
+            for axis in range(2):
+                cp, cm = centers.copy(), centers.copy()
+                cp[i, axis] += eps
+                cm[i, axis] -= eps
+                ep, _ = scene.energy_and_grad(cp, smooth_eps=smooth_eps)
+                em, _ = scene.energy_and_grad(cm, smooth_eps=smooth_eps)
+                num_grad[i, axis] = (ep - em) / (2.0 * eps)
 
-    assert np.allclose(grad, num_grad, rtol=1e-4, atol=1e-4)
+        assert np.allclose(grad, num_grad, rtol=1e-4, atol=1e-4)
 
 
 def test_potential_and_single_point_target():
@@ -187,7 +232,7 @@ def test_matplotlib_dense_scatter_dpi_invariant_and_flush_matched_leashes():
     expected_rgb = np.asarray(sc.get_facecolor())[0, :3]
     ann0 = res.annotations[0]
     assert ann0.arrowprops is not None
-    assert ann0.arrowprops["shrinkB"] == 0.0
+    assert np.isclose(ann0.arrowprops["shrinkB"], 0.5 * np.sqrt(50.0) + 0.5, atol=0.5)
     bbox_patch = ann0.get_bbox_patch()
     arrow_patch = ann0.arrow_patch
     assert bbox_patch is not None

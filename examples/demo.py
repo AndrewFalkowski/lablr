@@ -115,7 +115,9 @@ def build_demo_figure() -> matplotlib.figure.Figure:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run lablr visual demo.")
-    parser.add_argument("--save", type=str, default=None, help="Save figure to path.")
+    parser.add_argument(
+        "--save", type=str, default="examples/demo.png", help="Save figure to path."
+    )
     args = parser.parse_args()
 
     fig = build_demo_figure()
